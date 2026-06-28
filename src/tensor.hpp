@@ -1,9 +1,13 @@
+#pragma once
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 
+#include "util.hpp"
 #include "alloc.hpp"
 
 namespace top {
@@ -13,22 +17,13 @@ enum DeviceType: std::int8_t {
     mps
 };
 
-struct Tensor {
-    float* data_;
-    std::array<int, 4> shape;
-    int ndim;
-    DeviceType device_;
-    Allocator* alloc_;
+class Tensor {
+public:
+    Tensor(float* data, std::array<int, 4> shape, int ndim, DeviceType device = DeviceType::cpu);
+    Tensor(std::array<int, 4> shape, int ndim, DeviceType device);
+    ~Tensor();
 
-    Tensor(float* data, std::array<int, 4> shape, int _ndim, DeviceType device);
-    Tensor(float* data, std::array<int, 4> shape, int _ndim, DeviceType device, Allocator* alloc);
-    Tensor(std::array<int, 4> shape, int _ndim, DeviceType device);
-
-    Tensor(const Tensor& other) : data_{nullptr}, shape{other.shape}, ndim{other.ndim}, device_{other.device_}, alloc_{other.alloc_}
-    {
-        data_ = static_cast<float*>(alloc_->allocate(other.size() * sizeof(float)));
-        std::uninitialized_copy_n(other.data_, other.size(), data_);
-    }
+    Tensor(const Tensor& other);
 
     size_t size() const;
 
@@ -36,20 +31,26 @@ struct Tensor {
 
     auto broadcast() const -> Tensor;
 
-    friend auto operator+(const Tensor& a, const Tensor& b) -> Tensor;
-    friend auto operator*(const Tensor& a, const Tensor& b) -> Tensor;
-    friend auto operator-(const Tensor& a, const Tensor& b) -> Tensor;
-    friend auto operator/(const Tensor& a, const Tensor& b) -> Tensor;
+    auto data() const -> float* {return data_;}
+
+    auto shape() const -> std::span<const int, 4> {return std::span{shape_};}
+
+    auto ndim() const -> int {return ndim_;}
+
+    auto device() const -> DeviceType {return device_;}
+
+    auto alloc() const -> Allocator* {return alloc_;}
+
+    auto operator==(const Tensor& other) const -> bool;
+
+private:
+    float* data_;
+    std::array<int, 4> shape_;
+    int ndim_;
+    DeviceType device_;
+    Allocator* alloc_;
 };
 
-auto matmul(const Tensor& a, const Tensor& b) -> Tensor;
-
-auto check_elementwise_match(const Tensor& a, const Tensor& b) -> void;
-
-auto check_device_match(const Tensor& a, const Tensor& b) -> void;
-
-auto choose_allocator_from_device(DeviceType device) -> std::function<Allocator*(void)>;
-
-auto check_matmul_match(const Tensor& a, const Tensor& b) -> void;
+auto alloc_factory(DeviceType device) -> std::function<Allocator*(void)>;
 
 }

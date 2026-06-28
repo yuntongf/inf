@@ -15,6 +15,6 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(inf src/main.cpp)
 
-add_executable(tests tests/test_tensor.cpp src/tensor.cpp)
+add_executable(tests tests/test_tensor.cpp src/tensor.cpp src/tensor_op.cpp src/alloc.cpp src/util.cpp)
 target_include_directories(tests PRIVATE src)
 target_link_libraries(tests PRIVATE Catch2::Catch2WithMain)
