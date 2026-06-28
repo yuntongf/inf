@@ -10,8 +10,14 @@ auto operator/(const Tensor& a, const Tensor& b) -> Tensor;
 
 auto matmul(const Tensor& a, const Tensor& b) -> Tensor;
 
+// get broadcast shape starting from dim
+auto get_broadcast_shape(const Tensor& a, const Tensor& b, int dim) -> std::tuple<std::array<int, 4>, std::array<int, 4>>;
+auto broadcast(const Tensor& a, const Tensor& b, int dim = 0) -> std::tuple<Tensor, Tensor>;
+
 auto check_elementwise_match(const Tensor& a, const Tensor& b) -> void;
 auto check_device_match(const Tensor& a, const Tensor& b) -> void;
 auto check_matmul_match(const Tensor& a, const Tensor& b) -> void;
+
+auto translate_dim(const Tensor& t, int dim) -> int;
 
 }

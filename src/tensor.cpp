@@ -1,30 +1,73 @@
 #include "tensor.hpp"
+#include "alloc.hpp"
 
 #include <array>
 #include <memory>
 #include <cmath>
+#include <stdexcept>
 
 namespace top {
 
 Tensor::Tensor(float* data, std::array<int, 4> shape, int ndim, DeviceType device)
-: data_{data}, shape_{shape}, ndim_{ndim}, device_{device}, alloc_{}
+: data_{data},
+    shape_{shape},
+    strides_{infer_strides_from_shape_(shape, ndim)},
+    ndim_{ndim},
+    device_{device},
+    alloc_{}
 {}
 
+// When an allocator is passed, we copy the data from data pointer to assume ownership of the copied data
+Tensor::Tensor(float* data, std::array<int, 4> shape, int ndim, DeviceType device, Allocator* alloc)
+: data_{nullptr},
+    shape_{shape},
+    strides_{infer_strides_from_shape_(shape, ndim)},
+    ndim_{ndim},
+    device_{device},
+    alloc_{alloc}
+{
+    data_ = static_cast<float*>(alloc_->allocate(size() * sizeof(float)));
+    std::uninitialized_copy_n(data, size(), data_);
+}
+
 Tensor::Tensor(std::array<int, 4> shape, int ndim, DeviceType device)
-    : data_{nullptr}, shape_{shape}, ndim_{ndim}, device_{device},
-      alloc_{alloc_factory(device_)()} {
+    : data_{nullptr},
+        shape_{shape},
+        strides_{infer_strides_from_shape_(shape, ndim)},
+        ndim_{ndim},
+        device_{device},
+        alloc_{alloc_factory(device_)()} {
     data_ = static_cast<float*>(alloc_->allocate(size() * sizeof(float)));
 }
 
-/* We use the same allocator as the Tensor we are copying from */
 Tensor::Tensor(const Tensor& other)
-: data_{nullptr}, shape_{other.shape_}, ndim_{other.ndim_}, device_{other.device_}, alloc_{other.alloc_}
-{
-    if (!alloc_) {
-        alloc_ = alloc_factory(device_)();
-        data_ = static_cast<float*>(alloc_->allocate(size()));
-    }
-    std::uninitialized_copy_n(other.data_, other.size(), data_);
+: data_{other.data_},
+    shape_{other.shape_},
+    strides_{other.strides_},
+    ndim_{other.ndim_},
+    device_{other.device_},
+    alloc_{nullptr}
+{}
+
+auto Tensor::clone() const -> Tensor {
+    Tensor res{shape_, ndim_, device_};
+    std::memcpy(res.data_, data_, size() * sizeof(float));
+    return res;
+}
+
+Tensor& Tensor::operator=(Tensor other) {
+    swap(other);
+    return *this;
+}
+
+auto Tensor::swap(Tensor& other) noexcept -> void {
+    using std::swap;
+    swap(data_, other.data_);
+    swap(shape_, other.shape_);
+    swap(ndim_, other.ndim_);
+    swap(device_, other.device_);
+    swap(alloc_, other.alloc_);
+    swap(strides_, other.strides_);
 }
 
 Tensor::~Tensor() {
@@ -43,32 +86,39 @@ size_t Tensor::size() const {
 }
 
 auto Tensor::exp() const -> Tensor {
-    Tensor res{*this};
-    for (int i = 0; i < res.size(); ++i) {
+    Tensor res = clone();
+    for (size_t i = 0; i < res.size(); ++i)
         res.data_[i] = std::exp(res.data_[i]);
-    }
     return res;
 }
 
-auto Tensor::broadcast() const -> Tensor {
-    const int len = 4;
-    Tensor res{*this};
-    for (int i = 0; i < len; ++i) {
-        const int new_shape_idx = len - i - 1;
-        const int old_shape_idx = ndim_ - i - 1;
-        if (old_shape_idx >= 0) {
-            res.shape_[new_shape_idx] = res.shape_[old_shape_idx];
-        } else {
-            res.shape_[new_shape_idx] = 1;
+auto Tensor::reshape(std::span<int, 4> new_shape) const -> Tensor {
+    // check shape compatible and count ndim
+    size_t sz = 1;
+    int ndim = 0;
+    for (int shape : new_shape) {
+        if (shape == 0) {
+            break;
         }
+        sz *= shape;
+        ++ndim;
     }
-    res.ndim_ = len;
+    if (sz != size()) {
+        throw std::runtime_error("Cannot reshape tensor: invalid new shape");
+    }
+
+    Tensor res{*this};
+    std::ranges::copy(new_shape, res.shape_.begin());
+    res.ndim_ = ndim;
+    res.strides_ = infer_strides_from_shape_(res.shape_, ndim);
+
     return res;
 }
 
 auto Tensor::operator==(const Tensor& other) const -> bool {
     return ndim_ == other.ndim_ &&
             shape_ == other.shape_ &&
+            strides_ == other.strides_ &&
             device_ == other.device_ &&
             util::data_cmp(data_, other.data_, size());
 }
