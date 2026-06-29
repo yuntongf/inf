@@ -20,4 +20,14 @@ auto check_matmul_match(const Tensor& a, const Tensor& b) -> void;
 
 auto translate_dim(const Tensor& t, int dim) -> int;
 
+auto reduction_sum(const Tensor& t, int dim, bool keep_shape = false) -> Tensor;
+
+auto reduction_max(const Tensor& t, int dim, bool keep_shape = false) -> Tensor;
+
+auto reduction_mean(const Tensor& t, int dim, bool keep_shape = false) -> Tensor;
+
+auto softmax(const Tensor& t) -> Tensor;
+
+auto rms_norm(const Tensor& t) -> Tensor;
+
 }

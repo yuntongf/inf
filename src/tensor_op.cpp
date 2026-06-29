@@ -5,36 +5,48 @@
 
 namespace top {
 
-auto operator+(const Tensor& a, const Tensor& b) -> Tensor {
-    check_elementwise_match(a, b);
+// Converts a flat output index into an offset into a (possibly broadcast) input tensor
+static auto strided_offset(size_t flat_idx,
+                            std::span<const int, 4> out_shape,
+                            std::span<const int, 4> in_strides,
+                            int ndim) -> size_t {
+    size_t offset = 0;
+    for (int d = 0; d < ndim; ++d) {
+        offset += (flat_idx % out_shape[d]) * in_strides[d];
+        flat_idx /= out_shape[d];
+    }
+    return offset;
+}
+
+static auto elementwise(const Tensor& a, const Tensor& b,
+                         auto op) -> Tensor {
     check_device_match(a, b);
-    Tensor res = a.clone();
-    for (size_t i = 0; i < a.size(); ++i) res.data()[i] += b.data()[i];
+    const auto [A, B] = broadcast(a, b, 0);
+    std::array<int, 4> res_shape;
+    std::ranges::copy(A.shape(), res_shape.begin());
+    Tensor res{res_shape, A.ndim(), A.device()};
+    for (size_t i = 0; i < res.size(); ++i) {
+        const float av = A.data()[strided_offset(i, A.shape(), A.strides(), A.ndim())];
+        const float bv = B.data()[strided_offset(i, B.shape(), B.strides(), B.ndim())];
+        res.data()[i] = op(av, bv);
+    }
     return res;
+}
+
+auto operator+(const Tensor& a, const Tensor& b) -> Tensor {
+    return elementwise(a, b, [](float x, float y){ return x + y; });
 }
 
 auto operator-(const Tensor& a, const Tensor& b) -> Tensor {
-    check_elementwise_match(a, b);
-    check_device_match(a, b);
-    Tensor res = a.clone();
-    for (size_t i = 0; i < a.size(); ++i) res.data()[i] -= b.data()[i];
-    return res;
+    return elementwise(a, b, [](float x, float y){ return x - y; });
 }
 
 auto operator*(const Tensor& a, const Tensor& b) -> Tensor {
-    check_elementwise_match(a, b);
-    check_device_match(a, b);
-    Tensor res = a.clone();
-    for (size_t i = 0; i < a.size(); ++i) res.data()[i] *= b.data()[i];
-    return res;
+    return elementwise(a, b, [](float x, float y){ return x * y; });
 }
 
 auto operator/(const Tensor& a, const Tensor& b) -> Tensor {
-    check_elementwise_match(a, b);
-    check_device_match(a, b);
-    Tensor res = a.clone();
-    for (size_t i = 0; i < a.size(); ++i) res.data()[i] /= b.data()[i];
-    return res;
+    return elementwise(a, b, [](float x, float y){ return x / y; });
 }
 
 auto matmul(const Tensor& a, const Tensor& b) -> Tensor {
@@ -49,19 +61,20 @@ auto matmul(const Tensor& a, const Tensor& b) -> Tensor {
     for (int i = 2; i < A.ndim(); ++i) batch_size *= A.shape()[i];
 
     std::array<int, 4> res_shape{N, M, 0, 0};
-    const auto batch_dims = A.shape().subspan(2);
-
-    const int num_batch_dims = A.ndim() - 2;
-
-    std::ranges::copy(batch_dims, res_shape.begin() + 2);
+    std::ranges::copy(A.shape().subspan(2), res_shape.begin() + 2);
     Tensor res{res_shape, A.ndim(), A.device()};
 
     for (int b = 0; b < batch_size; ++b) {
-        const int outer_batch_idx =  (num_batch_dims == 1) ? 0 : b / batch_dims[1];
-        const int inner_batch_idx =  (num_batch_dims == 1) ? b : b % batch_dims[1];
-
-        const float* a_ptr = A.data() + outer_batch_idx * A.strides()[3] + inner_batch_idx * A.strides()[2];
-        const float* b_ptr = B.data() + outer_batch_idx * B.strides()[3] + inner_batch_idx * B.strides()[2];
+        int rem = b;
+        size_t a_off = 0, b_off = 0;
+        for (int d = 2; d < A.ndim(); ++d) {
+            int idx = rem % res_shape[d];
+            rem    /= res_shape[d];
+            a_off  += idx * A.strides()[d];
+            b_off  += idx * B.strides()[d];
+        }
+        const float* a_ptr = A.data() + a_off;
+        const float* b_ptr = B.data() + b_off;
         float*       r_ptr = res.data() + b * M * N;
 
         for (int i = 0; i < M; ++i)
@@ -110,7 +123,7 @@ auto check_device_match(const Tensor& a, const Tensor& b) -> void {
 auto get_broadcast_shape(const Tensor &a, const Tensor &b, int dim) -> std::tuple<std::array<int, 4>, std::array<int, 4>> {
     if (a.ndim() != b.ndim()) {
         const auto err = std::format("tensor a (ndim={}) and b (ndim={}) do not have the same ndim and cannot be broadcasted", a.ndim(), b.ndim());
-        throw std::runtime_error(err);
+        throw std::invalid_argument(err);
     }
 
     std::array<int, 4> a_new_shape{};
@@ -132,15 +145,15 @@ auto get_broadcast_shape(const Tensor &a, const Tensor &b, int dim) -> std::tupl
             const auto err = std::format(
                 "Tensor a and b have different dim at dimension {}: dim={} and dim={}",
                 i, a.shape()[i], b.shape()[i]);
-            throw std::runtime_error(err);
+            throw std::invalid_argument(err);
         }
     }
     return std::make_tuple(a_new_shape, b_new_shape);
 }
 
 auto broadcast(const Tensor& a, const Tensor& b, int dim) -> std::tuple<Tensor, Tensor> {
-    auto new_shapes = get_broadcast_shape(a, b, dim);
-    return std::make_tuple(a.reshape(std::get<0>(new_shapes)), b.reshape(std::get<1>(new_shapes)));
+    auto [a_shape, b_shape] = get_broadcast_shape(a, b, dim);
+    return {a.expand(a_shape), b.expand(b_shape)};
 }
 
 auto translate_dim(const Tensor& t, int dim) -> int {
@@ -152,5 +165,15 @@ auto translate_dim(const Tensor& t, int dim) -> int {
     }
     return dim;
 }
+
+auto reduction_sum(const Tensor& t, int dim, bool keep_shape) -> Tensor;
+
+auto reduction_max(const Tensor& t, int dim, bool keep_shape) -> Tensor;
+
+auto reduction_mean(const Tensor& t, int dim, bool keep_shape) -> Tensor;
+
+auto softmax(const Tensor& t) -> Tensor;
+
+auto rms_norm(const Tensor& t) -> Tensor;
 
 } // namespace top

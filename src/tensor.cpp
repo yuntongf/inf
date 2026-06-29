@@ -1,6 +1,7 @@
 #include "tensor.hpp"
 #include "alloc.hpp"
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <cmath>
@@ -85,11 +86,57 @@ size_t Tensor::size() const {
     return sz;
 }
 
+auto Tensor::operator*(const float c) const -> Tensor {
+    Tensor res = clone();
+    std::ranges::for_each(std::span<float>(res.data_, size()), [c](float& num){ num *= c; });
+    return res;
+}
+
+auto Tensor::operator+(const float c) const -> Tensor {
+    Tensor res = clone();
+    std::ranges::for_each(std::span<float>(res.data_, size()), [c](float& num){ num += c; });
+    return res;
+}
+
+auto Tensor::operator-(const float c) const -> Tensor {
+    Tensor res = clone();
+    std::ranges::for_each(std::span<float>(res.data_, size()), [c](float& num){ num -= c; });
+    return res;
+}
+
+auto Tensor::operator/(const float c) const -> Tensor {
+    Tensor res = clone();
+    std::ranges::for_each(std::span<float>(res.data_, size()), [c](float& num){ num /= c; });
+    return res;
+}
+
+
 auto Tensor::exp() const -> Tensor {
     Tensor res = clone();
     for (size_t i = 0; i < res.size(); ++i)
         res.data_[i] = std::exp(res.data_[i]);
     return res;
+}
+
+auto Tensor::expand(std::array<int, 4> new_shape) const -> Tensor {
+    Tensor res{*this}; // shallow copy — strides intentionally preserved
+    res.shape_ = new_shape;
+    return res;
+}
+
+auto Tensor::infer_strides_from_shape_(std::span<int, 4> shape, int ndim) const -> std::array<int, 4> {
+    std::array<int, 4> strides{};
+    int running = 1;
+    for (int i = 0; i < ndim; ++i) {
+        if (shape[i] == 1) {
+            // broadcast dim: stride-0 means all indices alias element 0
+            strides[i] = 0;
+        } else {
+            strides[i] = running;
+            running *= shape[i];
+        }
+    }
+    return strides;
 }
 
 auto Tensor::reshape(std::span<int, 4> new_shape) const -> Tensor {

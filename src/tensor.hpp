@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <span>
 
 #include "util.hpp"
@@ -30,13 +29,10 @@ public:
     Tensor(Tensor&& other) noexcept = default;
     Tensor& operator=(Tensor&& other) noexcept = default;
 
+
     auto swap(Tensor& other) noexcept -> void;
 
     size_t size() const;
-
-    auto exp() const -> Tensor;
-
-    auto reshape(std::span<int, 4> new_shape) const -> Tensor;
 
     auto data() const -> float* {return data_;}
 
@@ -50,20 +46,25 @@ public:
 
     auto strides() const -> std::span<const int, 4> {return std::span{strides_};}
 
+    auto reshape(std::span<int, 4> new_shape) const -> Tensor;
+
+    // Shallow view with a new shape; strides are preserved so stride-0 broadcast dims stay stride-0.
+    auto expand(std::array<int, 4> new_shape) const -> Tensor;
+
+    auto exp() const -> Tensor;
+
     auto operator==(const Tensor& other) const -> bool;
 
+    auto operator+(const float c) const -> Tensor;
+
+    auto operator-(const float c) const -> Tensor;
+
+    auto operator*(const float c) const -> Tensor;
+
+    auto operator/(const float c) const -> Tensor;
+
 private:
-    static auto infer_strides_from_shape_(std::span<int, 4> shape, int ndim) -> std::array<int, 4> {
-        std::array<int, 4> strides {}; // innermost dimension is stride of 1
-        for (int i = 0; i < ndim; ++i) {
-            if (shape[i] == 1) {
-                strides[i] = 0;
-            } else {
-                strides[i] = (i == 0) ? 1 : shape[i-1] * strides[i-1];
-            }
-        }
-        return strides;
-    }
+    auto infer_strides_from_shape_(std::span<int, 4> shape, int ndim) const -> std::array<int, 4>;
 
 private:
     float* data_;
