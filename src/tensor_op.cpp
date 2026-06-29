@@ -1,6 +1,9 @@
 #include "tensor_op.hpp"
 
+#include <cstddef>
 #include <format>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 
 namespace top {
@@ -166,14 +169,89 @@ auto translate_dim(const Tensor& t, int dim) -> int {
     return dim;
 }
 
-auto reduction_sum(const Tensor& t, int dim, bool keep_shape) -> Tensor;
+auto reduction(const Tensor& t, int dim, auto op, bool keep_shape) -> Tensor {
+    dim = translate_dim(t, dim);
+    const int shape_idx = t.ndim() - dim - 1;
 
-auto reduction_max(const Tensor& t, int dim, bool keep_shape) -> Tensor;
+    const int block_stride = t.shape()[shape_idx] * t.strides()[shape_idx];
+    const int num_blocks = t.size() / block_stride;
 
-auto reduction_mean(const Tensor& t, int dim, bool keep_shape) -> Tensor;
+    std::array<int, 4> new_shape{};
+    if (!keep_shape) {
+        std::ranges::copy(t.shape().begin(), t.shape().begin() + shape_idx, new_shape.begin());
+        if (shape_idx < t.ndim() - 1)
+            std::ranges::copy(t.shape().begin() + shape_idx + 1, t.shape().end(), new_shape.begin() + shape_idx);
+    } else {
+        std::ranges::copy(t.shape().begin(), t.shape().end(), new_shape.begin());
+        new_shape[shape_idx] = 1;
+    }
 
-auto softmax(const Tensor& t) -> Tensor;
+    Tensor res{new_shape, keep_shape ? t.ndim() : t.ndim() - 1, t.device()};
 
-auto rms_norm(const Tensor& t) -> Tensor;
+    for (int i = 0; i < num_blocks; ++i) {
+        const std::span<float> block{t.data() + i * block_stride, static_cast<size_t>(block_stride)};
+        const int sub_block_stride = t.strides()[shape_idx];
+        auto target = res.data() + i * sub_block_stride;
+
+        op(target, block, sub_block_stride);
+    }
+
+    return res;
+}
+
+auto reduction_sum(const Tensor& t, int dim, bool keep_shape) -> Tensor {
+    const auto sum_op = [](float* target, const std::span<float> block, int sub_block_stride) {
+        std::uninitialized_fill_n(target, sub_block_stride, 0.0);
+        for (int i = 0; i < block.size() / sub_block_stride; ++i) {
+            for (int j = 0; j < sub_block_stride; ++j) {
+                target[j] += block[i * sub_block_stride + j];
+            }
+        }
+    };
+
+    return reduction(t, dim, sum_op, keep_shape);
+}
+
+auto reduction_max(const Tensor& t, int dim, bool keep_shape) -> Tensor {
+    const auto max_op = [](float* target, const std::span<float> block, int sub_block_stride) {
+        std::uninitialized_fill_n(target, sub_block_stride, std::numeric_limits<float>::min());
+        const int num_sub_blocks = block.size() / sub_block_stride;
+        for (int i = 0; i < num_sub_blocks; ++i) {
+            bool found_greater = false;
+            for (int j = 0; j < sub_block_stride; ++j) {
+                if (block[i * sub_block_stride + j] > target[j]) {
+                    found_greater = true;
+                    break;
+                }
+            }
+            if (found_greater) {
+                std::ranges::copy_n(block.begin() + i * sub_block_stride, sub_block_stride, target);
+            }
+        }
+    };
+    return reduction(t, dim, max_op, keep_shape);
+}
+
+auto reduction_mean(const Tensor& t, int dim, bool keep_shape) -> Tensor {
+    const auto mean_op = [](float* target, const std::span<float> block, int sub_block_stride) {
+        std::uninitialized_fill_n(target, sub_block_stride, 0.0);
+        const int num_sub_blocks = block.size() / sub_block_stride;
+        for (int i = 0; i < num_sub_blocks; ++i) {
+            for (int j = 0; j < sub_block_stride; ++j) {
+                target[j] += block[i * sub_block_stride + j];
+            }
+        }
+
+        for (int j = 0; j < sub_block_stride; ++j) {
+            target[j] /= static_cast<float>(num_sub_blocks);
+        }
+    };
+    return reduction(t, dim, mean_op, keep_shape);
+}
+
+auto softmax(const Tensor& x, int dim, bool keep_shape) -> Tensor {
+    const auto stable_x = x- reduction_max(x, dim, keep_shape);
+    return stable_x.exp() / reduction_sum(stable_x.exp(), dim, keep_shape);
+}
 
 } // namespace top

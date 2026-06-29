@@ -1,0 +1,10 @@
+[
+  {
+    "label": "Debug tests",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "program": "build/inf",
+    "args": [],
+    "cwd": "build",
+  },
+]

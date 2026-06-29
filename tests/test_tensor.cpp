@@ -300,3 +300,190 @@ TEST_CASE("batched matmul inner dim mismatch throws") {
 
     CHECK_THROWS_AS(matmul(a, b), std::runtime_error);
 }
+
+// ---------------------------------------------------------------------------
+// Reductions
+// ---------------------------------------------------------------------------
+// All 2D tests use shape {2, 3}: 2 cols (innermost), 3 rows (outermost).
+// Data stored row-major innermost-first: [r0c0, r0c1, r1c0, r1c1, r2c0, r2c1]
+//   row0=[1,2]  row1=[3,4]  row2=[5,6]
+// dim=0 reduces along rows  → result shape {2}  (one value per column)
+// dim=1 reduces along cols  → result shape {3}  (one value per row)
+
+TEST_CASE("reduction_sum 1D") {
+    float data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    Tensor t(data, {4, 0, 0, 0}, 1);
+    Tensor r = reduction_sum(t, 0);
+
+    CHECK(r.ndim()    == 0);
+    CHECK(r.size()    == 1);
+    CHECK(r.data()[0] == 10.0f);
+}
+
+TEST_CASE("reduction_sum 2D along dim=0 (rows)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_sum(t, 0);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 2);
+    CHECK(r.data()[0]  == 9.0f);  // col0: 1+3+5
+    CHECK(r.data()[1]  == 12.0f); // col1: 2+4+6
+}
+
+TEST_CASE("reduction_sum 2D along dim=1 (cols)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_sum(t, 1);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 3);
+    CHECK(r.data()[0]  == 3.0f);  // row0: 1+2
+    CHECK(r.data()[1]  == 7.0f);  // row1: 3+4
+    CHECK(r.data()[2]  == 11.0f); // row2: 5+6
+}
+
+TEST_CASE("reduction_sum keep_shape=true preserves ndim and collapses dim to 1") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_sum(t, 0, true);
+
+    CHECK(r.ndim()     == 2);
+    CHECK(r.shape()[0] == 2);
+    CHECK(r.shape()[1] == 1);
+    CHECK(r.data()[0]  == 9.0f);
+    CHECK(r.data()[1]  == 12.0f);
+}
+
+TEST_CASE("reduction_max 1D") {
+    float data[4] = {3.0f, 1.0f, 4.0f, 2.0f};
+    Tensor t(data, {4, 0, 0, 0}, 1);
+    Tensor r = reduction_max(t, 0);
+
+    CHECK(r.ndim()    == 0);
+    CHECK(r.size()    == 1);
+    CHECK(r.data()[0] == 4.0f);
+}
+
+TEST_CASE("reduction_max 2D along dim=0 (rows)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_max(t, 0);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 2);
+    CHECK(r.data()[0]  == 5.0f); // col0 max: max(1,3,5)
+    CHECK(r.data()[1]  == 6.0f); // col1 max: max(2,4,6)
+}
+
+TEST_CASE("reduction_max 2D along dim=1 (cols)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_max(t, 1);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 3);
+    CHECK(r.data()[0]  == 2.0f); // row0 max: max(1,2)
+    CHECK(r.data()[1]  == 4.0f); // row1 max: max(3,4)
+    CHECK(r.data()[2]  == 6.0f); // row2 max: max(5,6)
+}
+
+TEST_CASE("reduction_max keep_shape=true") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_max(t, 1, true);
+
+    CHECK(r.ndim()     == 2);
+    CHECK(r.shape()[0] == 1);
+    CHECK(r.shape()[1] == 3);
+}
+
+TEST_CASE("reduction_mean 1D") {
+    float data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    Tensor t(data, {4, 0, 0, 0}, 1);
+    Tensor r = reduction_mean(t, 0);
+
+    CHECK(r.ndim()    == 0);
+    CHECK(r.size()    == 1);
+    CHECK(r.data()[0] == Approx(2.5f));
+}
+
+TEST_CASE("reduction_mean 2D along dim=0 (rows)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_mean(t, 0);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 2);
+    CHECK(r.data()[0]  == Approx(3.0f)); // (1+3+5)/3
+    CHECK(r.data()[1]  == Approx(4.0f)); // (2+4+6)/3
+}
+
+TEST_CASE("reduction_mean 2D along dim=1 (cols)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = reduction_mean(t, 1);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 3);
+    CHECK(r.data()[0]  == Approx(1.5f)); // (1+2)/2
+    CHECK(r.data()[1]  == Approx(3.5f)); // (3+4)/2
+    CHECK(r.data()[2]  == Approx(5.5f)); // (5+6)/2
+}
+
+TEST_CASE("reduction negative dim (-1 == innermost)") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor pos = reduction_sum(t,  1);
+    Tensor neg = reduction_sum(t, -1);
+
+    REQUIRE(pos.size() == neg.size());
+    for (size_t i = 0; i < pos.size(); ++i)
+        CHECK(pos.data()[i] == neg.data()[i]);
+}
+
+TEST_CASE("reduction out-of-bounds dim throws") {
+    float data[4] = {};
+    Tensor t(data, {2, 2, 0, 0}, 2);
+
+    CHECK_THROWS_AS(reduction_sum(t,  2), std::invalid_argument);
+    CHECK_THROWS_AS(reduction_sum(t, -3), std::invalid_argument);
+}
+
+TEST_CASE("softmax 1D sums to 1") {
+    float data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    Tensor t(data, {4, 0, 0, 0}, 1);
+    Tensor r = softmax(t, 0);
+
+    CHECK(r.ndim()     == 1);
+    CHECK(r.shape()[0] == 4);
+    float sum = 0;
+    for (size_t i = 0; i < r.size(); ++i) {
+        CHECK(r.data()[i] > 0.0f);
+        sum += r.data()[i];
+    }
+    CHECK(sum == Approx(1.0f));
+}
+
+TEST_CASE("softmax 2D each row sums to 1") {
+    float data[6] = {1, 2, 3, 4, 5, 6};
+    Tensor t(data, {2, 3, 0, 0}, 2);
+    Tensor r = softmax(t, 1); // along cols (per-row softmax)
+
+    CHECK(r.ndim()     == 2);
+    CHECK(r.shape()[0] == 2);
+    CHECK(r.shape()[1] == 3);
+    for (int row = 0; row < 3; ++row) {
+        float sum = r.data()[row * 2] + r.data()[row * 2 + 1];
+        CHECK(sum == Approx(1.0f));
+    }
+}
+
+TEST_CASE("softmax largest input gets largest output") {
+    float data[3] = {1.0f, 10.0f, 2.0f};
+    Tensor t(data, {3, 0, 0, 0}, 1);
+    Tensor r = softmax(t, 0);
+
+    CHECK(r.data()[1] > r.data()[0]);
+    CHECK(r.data()[1] > r.data()[2]);
+}

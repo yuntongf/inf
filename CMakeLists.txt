@@ -4,6 +4,7 @@ project(inf CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_BUILD_TYPE Debug)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -13,7 +14,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
-add_executable(inf src/main.cpp)
+add_executable(inf
+    src/main.cpp
+    src/tensor.cpp
+    src/tensor_op.cpp
+    src/gguf.cpp
+    src/alloc.cpp
+    src/util.cpp
+)
 
 add_executable(tests
     tests/test_tensor.cpp
