@@ -52,7 +52,14 @@ Tensor::Tensor(const Tensor& other)
 
 auto Tensor::clone() const -> Tensor {
     Tensor res{shape_, ndim_, device_};
-    std::memcpy(res.data_, data_, size() * sizeof(float));
+    for (size_t i = 0; i < res.size(); ++i) {
+        size_t src_off = 0, tmp = i;
+        for (int d = 0; d < ndim_; ++d) {
+            src_off += (tmp % shape_[d]) * strides_[d];
+            tmp /= shape_[d];
+        }
+        res.data_[i] = data_[src_off];
+    }
     return res;
 }
 
@@ -118,6 +125,33 @@ auto Tensor::exp() const -> Tensor {
     return res;
 }
 
+auto Tensor::sqrt() const -> Tensor {
+    Tensor res = clone();
+    for (size_t i = 0; i < res.size(); ++i)
+        res.data_[i] = std::sqrt(res.data_[i]);
+    return res;
+}
+
+auto Tensor::transpose(int dim0, int dim1) const -> Tensor {
+    if (dim0 < 0) dim0 += ndim_;
+    if (dim1 < 0) dim1 += ndim_;
+    const int idx0 = ndim_ - dim0 - 1;
+    const int idx1 = ndim_ - dim1 - 1;
+    Tensor res{*this};
+    std::swap(res.shape_[idx0], res.shape_[idx1]);
+    std::swap(res.strides_[idx0], res.strides_[idx1]);
+    return res;
+}
+
+auto Tensor::slice(int dim, int start, int end) const -> Tensor {
+    if (dim < 0) dim += ndim_;
+    const int internal_idx = ndim_ - dim - 1;
+    Tensor res{*this};
+    res.data_ += start * strides_[internal_idx];
+    res.shape_[internal_idx] = end - start;
+    return res;
+}
+
 auto Tensor::expand(std::array<int, 4> new_shape) const -> Tensor {
     Tensor res{*this}; // shallow copy — strides intentionally preserved
     res.shape_ = new_shape;
@@ -138,6 +172,12 @@ auto Tensor::infer_strides_from_shape_(std::span<int, 4> shape, int ndim) const 
     }
     return strides;
 }
+
+// template <typename T>
+// auto Tensor::to() const -> Tensor {
+//     Tensor res{*this}; // shallow copy
+//     res.data() = reinterpret_cast<T*>(res.data()); // maybe there's a better way?
+// }
 
 auto Tensor::reshape(std::span<int, 4> new_shape) const -> Tensor {
     // check shape compatible and count ndim

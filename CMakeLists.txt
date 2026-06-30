@@ -18,6 +18,7 @@ add_executable(inf
     src/main.cpp
     src/tensor.cpp
     src/tensor_op.cpp
+    src/transformer.cpp
     src/gguf.cpp
     src/alloc.cpp
     src/util.cpp
@@ -26,8 +27,10 @@ add_executable(inf
 add_executable(tests
     tests/test_tensor.cpp
     tests/test_gguf.cpp
+    tests/test_transformer.cpp
     src/tensor.cpp
     src/tensor_op.cpp
+    src/transformer.cpp
     src/gguf.cpp
     src/alloc.cpp
     src/util.cpp

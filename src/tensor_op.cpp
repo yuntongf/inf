@@ -1,10 +1,13 @@
 #include "tensor_op.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <format>
 #include <limits>
 #include <memory>
+#include <source_location>
 #include <stdexcept>
+#include <vector>
 
 namespace top {
 
@@ -52,9 +55,20 @@ auto operator/(const Tensor& a, const Tensor& b) -> Tensor {
     return elementwise(a, b, [](float x, float y){ return x / y; });
 }
 
-auto matmul(const Tensor& a, const Tensor& b) -> Tensor {
+auto matmul(const Tensor& a, const Tensor& b, const std::source_location& loc) -> Tensor {
     const auto [A, B] = broadcast(a, b, 2);
-    check_matmul_match(A, B);
+    if (A.ndim() < 2 || B.ndim() < 2) {
+        throw std::runtime_error("Trying to multiply matrices of dim < 2!");
+    }
+    if (A.shape()[0] != B.shape()[1]) {
+        const auto err = std::format("{}:{} in {}: Shape mismatch when trying to multiply two matrices: [{}, {}] and [{}, {}]",
+            loc.file_name(), loc.line(), loc.function_name(),
+            A.shape()[1], A.shape()[0], B.shape()[1], B.shape()[0]);
+        throw std::runtime_error(err);
+    }
+    if (A.device() != B.device()) {
+        throw std::runtime_error("Trying to multiply two matrices of different devices");
+    }
 
     const int M = A.shape()[1]; // rows of A
     const int K = A.shape()[0]; // cols of A = rows of B
@@ -67,8 +81,13 @@ auto matmul(const Tensor& a, const Tensor& b) -> Tensor {
     std::ranges::copy(A.shape().subspan(2), res_shape.begin() + 2);
     Tensor res{res_shape, A.ndim(), A.device()};
 
-    for (int b = 0; b < batch_size; ++b) {
-        int rem = b;
+    const int a_stride_col = A.strides()[0];
+    const int a_stride_row = A.strides()[1];
+    const int b_stride_col = B.strides()[0];
+    const int b_stride_row = B.strides()[1];
+
+    for (int bi = 0; bi < batch_size; ++bi) {
+        int rem = bi;
         size_t a_off = 0, b_off = 0;
         for (int d = 2; d < A.ndim(); ++d) {
             int idx = rem % res_shape[d];
@@ -78,32 +97,19 @@ auto matmul(const Tensor& a, const Tensor& b) -> Tensor {
         }
         const float* a_ptr = A.data() + a_off;
         const float* b_ptr = B.data() + b_off;
-        float*       r_ptr = res.data() + b * M * N;
+        float*       r_ptr = res.data() + bi * M * N;
 
         for (int i = 0; i < M; ++i)
             for (int j = 0; j < N; ++j) {
                 float sum = 0;
                 for (int k = 0; k < K; ++k)
-                    sum += a_ptr[i * K + k] * b_ptr[k * N + j];
+                    sum += a_ptr[i * a_stride_row + k * a_stride_col] *
+                           b_ptr[k * b_stride_row + j * b_stride_col];
                 r_ptr[i * N + j] = sum;
             }
     }
 
     return res;
-}
-
-auto check_matmul_match(const Tensor& a, const Tensor& b) -> void {
-    if (a.ndim() < 2 || b.ndim() < 2) {
-        throw std::runtime_error("Trying to multiply matrices of dim < 2!");
-    }
-    if (a.shape()[0] != b.shape()[1]) {
-        const auto err = std::format("Shape mismatch when trying to multiply two matrices: [{}, {}] and [{}, {}]",
-            a.shape()[1], a.shape()[0], b.shape()[1], b.shape()[0]);
-        throw std::runtime_error(err);
-    }
-    if (a.device() != b.device()) {
-        throw std::runtime_error("Trying to multiply two matrices of different devices");
-    }
 }
 
 auto check_elementwise_match(const Tensor& a, const Tensor& b) -> void {
@@ -214,7 +220,7 @@ auto reduction_sum(const Tensor& t, int dim, bool keep_shape) -> Tensor {
 
 auto reduction_max(const Tensor& t, int dim, bool keep_shape) -> Tensor {
     const auto max_op = [](float* target, const std::span<float> block, int sub_block_stride) {
-        std::uninitialized_fill_n(target, sub_block_stride, std::numeric_limits<float>::min());
+        std::uninitialized_fill_n(target, sub_block_stride, std::numeric_limits<float>::lowest());
         const int num_sub_blocks = block.size() / sub_block_stride;
         for (int i = 0; i < num_sub_blocks; ++i) {
             bool found_greater = false;
@@ -250,8 +256,66 @@ auto reduction_mean(const Tensor& t, int dim, bool keep_shape) -> Tensor {
 }
 
 auto softmax(const Tensor& x, int dim, bool keep_shape) -> Tensor {
-    const auto stable_x = x- reduction_max(x, dim, keep_shape);
+    const auto stable_x = x - reduction_max(x, dim, keep_shape);
     return stable_x.exp() / reduction_sum(stable_x.exp(), dim, keep_shape);
+}
+
+auto silu(const Tensor& t) -> Tensor {
+    Tensor res = t.clone();
+    for (size_t i = 0; i < res.size(); ++i) {
+        const float x = res.data()[i];
+        res.data()[i] = x / (1.0f + std::exp(-x));
+    }
+    return res;
+}
+
+auto rms_norm(const Tensor& t, const Tensor& weight, float eps) -> Tensor {
+    Tensor res = t.clone();
+    const int d_inner = res.shape()[0];
+    const int n_pos   = static_cast<int>(res.size()) / d_inner;
+    for (int p = 0; p < n_pos; ++p) {
+        float* row = res.data() + p * d_inner;
+        float sum_sq = 0.0f;
+        for (int j = 0; j < d_inner; ++j) sum_sq += row[j] * row[j];
+        const float rms = std::sqrt(sum_sq / d_inner + eps);
+        for (int j = 0; j < d_inner; ++j)
+            row[j] = row[j] / rms * weight.data()[j * weight.strides()[0]];
+    }
+    return res;
+}
+
+// We assume embedding is 2D tensor: [vocab, d_model]
+// indices tensor can be batched! [batch, seq_len]
+auto embedding_index_select(const Tensor& embedding, const Tensor& indices) -> Tensor {
+    std::array<int, 4> res_shape{};
+    //copy the batch shape
+    std::ranges::copy(indices.shape().begin(), indices.shape().end() - 1, res_shape.begin() + 1);
+    res_shape[0] = embedding.shape()[0];
+
+    const int seq_len = indices.shape()[0];
+    const int num_batches = indices.size() / seq_len;
+    const int d_model = embedding.shape()[0];
+    const int batch_size = seq_len * d_model;
+
+    Tensor res{res_shape, indices.ndim() + 1, embedding.device()};
+
+    for (int i = 0; i < indices.size(); ++i) {
+        const int idx = static_cast<int>(indices.data()[i]);
+        const int offset = idx * d_model;
+        std::ranges::copy(embedding.data() + offset, embedding.data() + offset + d_model, res.data() + i * d_model);
+    }
+
+    return res;
+}
+
+auto causal_mask(int seq_len, DeviceType device) -> Tensor {
+    std::array<int, 4> shape{seq_len, seq_len, 0, 0};
+    Tensor mask{shape, 2, device};
+    // mask[col=k, row=q] = 0 if k <= q, -inf otherwise
+    for (int q = 0; q < seq_len; ++q)
+        for (int k = 0; k < seq_len; ++k)
+            mask.data()[q * seq_len + k] = (k > q) ? -std::numeric_limits<float>::infinity() : 0.0f;
+    return mask;
 }
 
 } // namespace top

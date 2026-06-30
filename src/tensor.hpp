@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <span>
 
 #include "util.hpp"
@@ -27,7 +28,6 @@ public:
 
     auto clone() const -> Tensor; // deep copy, always allocates
     Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(Tensor&& other) noexcept = default;
 
 
     auto swap(Tensor& other) noexcept -> void;
@@ -53,6 +53,14 @@ public:
 
     auto exp() const -> Tensor;
 
+    auto sqrt() const -> Tensor;
+
+    // Returns a view with dim0 and dim1 swapped (strides/shapes exchanged).
+    auto transpose(int dim0 = -2, int dim1 = -1) const -> Tensor;
+
+    // Returns a view of elements [start, end) along logical dimension dim.
+    auto slice(int dim, int start, int end) const -> Tensor;
+
     auto operator==(const Tensor& other) const -> bool;
 
     auto operator+(const float c) const -> Tensor;
@@ -62,6 +70,22 @@ public:
     auto operator*(const float c) const -> Tensor;
 
     auto operator/(const float c) const -> Tensor;
+
+    // // Convert the type of tensor, return a shallow copy!
+    // template <typename V>
+    // auto to() const -> Tensor;
+
+    // debug
+    auto print_shape(const std::string& name) const {
+        std::cout << name << ": [";
+        for (int i = ndim() - 1; i >= 0; --i) {
+            std::cout << shape()[i];
+            if (i != 0) {
+                std::cout << ", ";
+            }
+        }
+        std::cout << "]\n";
+    }
 
 private:
     auto infer_strides_from_shape_(std::span<int, 4> shape, int ndim) const -> std::array<int, 4>;
