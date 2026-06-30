@@ -87,6 +87,32 @@ public:
         std::cout << "]\n";
     }
 
+    // TODO: not trivial
+    auto print_data(const std::string& name) const {
+        std::cout << name << ": ";
+        std::function<void(int, size_t)> print_dim = [&](int k, size_t offset) {
+            if (k == ndim_) {
+                std::cout << data_[offset];
+                return;
+            }
+            const int cpp_axis = ndim_ - 1 - k;
+            const int n = shape_[cpp_axis];
+            const int stride = strides_[cpp_axis];
+            std::cout << "[";
+            for (int i = 0; i < n; ++i) {
+                print_dim(k + 1, offset + static_cast<size_t>(i) * stride);
+                if (i != n - 1) std::cout << ", ";
+            }
+            std::cout << "]";
+        };
+        if (ndim_ == 0) {
+            std::cout << data_[0];
+        } else {
+            print_dim(0, 0);
+        }
+        std::cout << "\n";
+    }
+
 private:
     auto infer_strides_from_shape_(std::span<int, 4> shape, int ndim) const -> std::array<int, 4>;
 

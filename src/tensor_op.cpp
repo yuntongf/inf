@@ -1,5 +1,6 @@
 #include "tensor_op.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <format>
@@ -179,7 +180,14 @@ auto reduction(const Tensor& t, int dim, auto op, bool keep_shape) -> Tensor {
     dim = translate_dim(t, dim);
     const int shape_idx = t.ndim() - dim - 1;
 
-    const int block_stride = t.shape()[shape_idx] * t.strides()[shape_idx];
+    // Recomputed from shape rather than read from strides(): a size-1 dim
+    // always carries stride 0 (the broadcast convention, see Tensor::expand),
+    // which would make this 0 for a reduced dim of size 1. reduction() only
+    // ever runs on freshly-allocated, genuinely contiguous tensors, so the
+    // standard contiguous-stride formula is always valid here.
+    int sub_block_stride = 1;
+    for (int d = 0; d < shape_idx; ++d) sub_block_stride *= t.shape()[d];
+    const int block_stride = t.shape()[shape_idx] * sub_block_stride;
     const int num_blocks = t.size() / block_stride;
 
     std::array<int, 4> new_shape{};
@@ -196,7 +204,6 @@ auto reduction(const Tensor& t, int dim, auto op, bool keep_shape) -> Tensor {
 
     for (int i = 0; i < num_blocks; ++i) {
         const std::span<float> block{t.data() + i * block_stride, static_cast<size_t>(block_stride)};
-        const int sub_block_stride = t.strides()[shape_idx];
         auto target = res.data() + i * sub_block_stride;
 
         op(target, block, sub_block_stride);
@@ -223,15 +230,9 @@ auto reduction_max(const Tensor& t, int dim, bool keep_shape) -> Tensor {
         std::uninitialized_fill_n(target, sub_block_stride, std::numeric_limits<float>::lowest());
         const int num_sub_blocks = block.size() / sub_block_stride;
         for (int i = 0; i < num_sub_blocks; ++i) {
-            bool found_greater = false;
             for (int j = 0; j < sub_block_stride; ++j) {
-                if (block[i * sub_block_stride + j] > target[j]) {
-                    found_greater = true;
-                    break;
-                }
-            }
-            if (found_greater) {
-                std::ranges::copy_n(block.begin() + i * sub_block_stride, sub_block_stride, target);
+                const float v = block[i * sub_block_stride + j];
+                if (v > target[j]) target[j] = v;
             }
         }
     };
@@ -255,9 +256,11 @@ auto reduction_mean(const Tensor& t, int dim, bool keep_shape) -> Tensor {
     return reduction(t, dim, mean_op, keep_shape);
 }
 
-auto softmax(const Tensor& x, int dim, bool keep_shape) -> Tensor {
-    const auto stable_x = x - reduction_max(x, dim, keep_shape);
-    return stable_x.exp() / reduction_sum(stable_x.exp(), dim, keep_shape);
+auto softmax(const Tensor& x, int dim) -> Tensor {
+    const auto max = reduction_max(x, dim, true);
+    const auto stable_x = x - max;
+
+    return stable_x.exp() / reduction_sum(stable_x.exp(), dim, true);
 }
 
 auto silu(const Tensor& t) -> Tensor {

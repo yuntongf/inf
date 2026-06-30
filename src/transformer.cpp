@@ -68,35 +68,38 @@ auto TransformerLM::attn_layer_(const Tensor& x, int layer) const -> Tensor {
     const Tensor K = top::matmul(x, Wk.at(layer).transpose()); // [batch dims, seq_len, d_model]
     const Tensor V = top::matmul(x, Wv.at(layer).transpose()); // [batch dims, seq_len, d_model]
 
-    const int head_size = (params_.seq_len + params_.num_heads - 1) / params_.num_heads;
+    const int head_dim = params_.d_model / params_.num_heads;
+    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
     std::array<int, 4> res_shape{};
     std::ranges::copy(Q.shape().begin(), Q.shape().end(), res_shape.begin());
 
-    Tensor res{res_shape, Q.ndim(), Q.device()};
+    Tensor res{res_shape, Q.ndim(), Q.device()}; // [batch, seq_len, d_model]
 
     const auto per_head = [&](int head_idx){
-        const int b_start = head_idx * head_size;
-        const int b_end = (head_idx + 1) * head_size;
-        const auto Q_h = Q.slice(-2, b_start, b_end); // Q [batch, d_q, d_model]
-        const auto K_h = K.slice(-2, b_start, b_end); // K [batch, d_k, d_model]
-        const auto V_h = V.slice(-2, b_start, b_end); // V [batch, d_v, d_model]
-        const auto QK = top::matmul(Q_h, K_h.transpose());
-        std::cout << "before soft qk: " << QK.data()[0] << "\n";
-        const Tensor soft_QK = top::softmax(QK, -2); // [batch, d_q, d_k]
-        std::cout << "after soft qk: " << soft_QK.data()[0] << "\n";
-        const Tensor attn_score = top::matmul(soft_QK, V_h); // [batch, dq, d_model]
-        std::ranges::copy(attn_score.data(), attn_score.data() + attn_score.size(), res.data() + b_start);
+        const int b_start = head_idx * head_dim;
+        const int b_end = (head_idx + 1) * head_dim;
+        const auto Q_h = Q.slice(-1, b_start, b_end); // [batch, seq_len, head_dim]
+        const auto K_h = K.slice(-1, b_start, b_end); // [batch, seq_len, head_dim]
+        const auto V_h = V.slice(-1, b_start, b_end); // [batch, seq_len, head_dim]
+        const auto QK = top::matmul(Q_h, K_h.transpose()) * scale; // [batch, seq_len(q), seq_len(k)]
+        const Tensor soft_QK = top::softmax(QK, -1); // softmax over keys
+        const Tensor attn_score = top::matmul(soft_QK, V_h); // [batch, seq_len, head_dim]
+
+        // res is [batch, seq_len, d_model]
+        const int num_positions = static_cast<int>(attn_score.size()) / head_dim;
+        for (int p = 0; p < num_positions; ++p) {
+            std::ranges::copy_n(attn_score.data() + p * head_dim,
+                                 head_dim,
+                                 res.data() + p * params_.d_model + b_start);
+        }
     };
 
     for (int h = 0; h < params_.num_heads; ++h) {
-        std::cout << "before head: " << res.data()[0] << "\n";
         per_head(h);
     }
 
-    std::cout << "before wo: " << res.data()[0] << "\n";
-
-    res = top::matmul(res, Wo.at(layer));
+    res = top::matmul(res, Wo.at(layer).transpose());
 
     return res;
 }
@@ -104,17 +107,14 @@ auto TransformerLM::attn_layer_(const Tensor& x, int layer) const -> Tensor {
 auto TransformerLM::swiglu_layer_(const Tensor& x, int layer) const -> Tensor {
     const auto wa_x = top::matmul(x, Wa.at(layer).transpose());
     const auto silu = top::silu(wa_x);
-    const auto wc_x = top::matmul(x, Wc.at(layer));
-    return top::matmul(silu * wc_x, Wb.at(layer));
+    const auto wb_x = top::matmul(x, Wb.at(layer).transpose());
+    return top::matmul(silu * wb_x, Wc.at(layer).transpose());
 }
 
 auto TransformerLM::transformer_block_(const Tensor& x, int layer) const -> Tensor {
     auto res = x;
-    std::cout << "original x: " << res.data()[0] << "\n";
     res = res + attn_layer_(top::rms_norm(x, W_attn_norm.at(layer), params_.eps), layer);
-    std::cout << "after attn x: " << res.data()[0] << "\n";
     res = res + swiglu_layer_(top::rms_norm(res, W_ffn_norm.at(layer), params_.eps), layer);
-    std::cout << "after swiglu x: " << res.data()[0] << "\n";
     return res;
 }
 

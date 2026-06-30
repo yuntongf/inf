@@ -29,7 +29,7 @@ auto reduction_max(const Tensor& t, int dim, bool keep_shape = false) -> Tensor;
 
 auto reduction_mean(const Tensor& t, int dim, bool keep_shape = false) -> Tensor;
 
-auto softmax(const Tensor& t, int dim, bool keep_shape = true) -> Tensor;
+auto softmax(const Tensor& t, int dim) -> Tensor;
 
 auto silu(const Tensor& t) -> Tensor;
 
